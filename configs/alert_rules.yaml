@@ -1,0 +1,33 @@
+rules:
+  - name: "Port Scan Detection"
+    condition: "rapid_port_connections > 50"
+    severity: HIGH
+    action: "alert_admin"
+  
+  - name: "Brute Force Detection"
+    condition: "failed_logins > 5 AND period < 60"
+    severity: CRITICAL
+    action: "block_ip"
+  
+  - name: "Data Exfiltration"
+    condition: "bytes_sent > 1e8 AND src_ip_reputation == internal"
+    severity: CRITICAL
+    action: "isolate_host"
+  
+  - name: "DDoS Attack"
+    condition: "connection_rate > 1000 AND dst_port in [80, 443]"
+    severity: CRITICAL
+    action: "rate_limit"
+  
+  - name: "Unusual Traffic Pattern"
+    condition: "anomaly_score > 0.8"
+    severity: MEDIUM
+    action: "log_event"
+
+thresholds:
+  port_scan_threshold: 50
+  brute_force_attempts: 5
+  data_exfil_bytes: 1e8
+  ddos_rate: 1000
+  anomaly_alert: 0.7
+  risk_alert: 70

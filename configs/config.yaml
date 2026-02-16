@@ -1,0 +1,62 @@
+model:
+  anomaly_detector:
+    algorithm: isolation_forest
+    contamination: 0.1
+    n_estimators: 100
+  
+  intent_predictor:
+    algorithm: gradient_boosting
+    n_estimators: 100
+    learning_rate: 0.1
+    max_depth: 5
+  
+  risk_scorer:
+    anomaly_weight: 0.4
+    intent_weight: 0.3
+    context_weight: 0.3
+    alert_threshold: 70
+
+feature_engineering:
+  window_size: 3600
+  update_interval: 300
+  features:
+    - basic
+    - traffic
+    - connection
+    - time_based
+
+thresholds:
+  anomaly_score: 0.7
+  intent_confidence: 0.6
+  risk_score: 70
+  failed_logins: 5
+  unusual_traffic: 1e7
+
+alert:
+  enabled: true
+  buffer_size: 1000
+  rules:
+    - name: "High Anomaly"
+      condition: "anomaly_score > 0.85"
+      severity: "CRITICAL"
+    
+    - name: "High Risk"
+      condition: "risk_score > 80"
+      severity: "HIGH"
+    
+    - name: "Intent Detected"
+      condition: "intent != benign"
+      severity: "MEDIUM"
+
+response:
+  auto_enabled: false
+  timeout: 300
+  default_actions:
+    - log_event
+    - alert_admin
+
+logging:
+  level: INFO
+  file: logs/cybersecurity.log
+  max_size: 10485760  # 10MB
+  backup_count: 5
