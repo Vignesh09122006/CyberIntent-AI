@@ -6,18 +6,17 @@ import streamlit as st
 import pandas as pd
 import joblib
 
-# Make project root importable
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from src.feature_engineering import load_logs, build_features
 from models.risk_scorer import compute_risk_score
+from src.response_engine import load_risk_threshold, simulate_auto_defense
 
 
 @st.cache_resource
 def load_models():
-    """Load trained models from disk (cached)."""
     anomaly_path = ROOT / "models" / "saved" / "anomaly_model.pkl"
     intent_path = ROOT / "models" / "saved" / "intent_model.pkl"
 
@@ -33,27 +32,16 @@ def load_models():
 
 @st.cache_data
 def load_data_with_scores():
-    """
-    Load raw logs, compute features, run models, and attach:
-      - anomaly_score
-      - intent_probability
-      - risk_score
-      - ground_truth (0/1 from risk_label)
-    """
     data_path = ROOT / "data" / "sample_logs.csv"
     if not data_path.exists():
         raise FileNotFoundError(
             "data/sample_logs.csv not found. Run 'python scripts/generate_dataset.py' first."
         )
 
-    # Raw for display
     raw = pd.read_csv(data_path)
-
-    # Processed for ML
     processed = load_logs(str(data_path))
     X, y = build_features(processed)
 
-    # Ensure timestamp is datetime in raw (if present)
     if "timestamp" in raw.columns:
         raw["timestamp"] = pd.to_datetime(raw["timestamp"], errors="coerce")
 
@@ -78,39 +66,39 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    st.title("🛡️ CyberIntent-AI")
+    st.title("CyberIntent-AI")
     st.subheader("Predicting attackers before they strike")
-
-    st.markdown(
-        """
-**What you see here:**
-
-- Anomaly score from behavior
-- Intent probability that an event is part of an attack
-- Combined risk score used for auto-block decisions
-        """
-    )
 
     df = load_data_with_scores()
 
-    # Sidebar controls
     with st.sidebar:
         st.header("Controls")
+
+        default_threshold = load_risk_threshold(default=0.7)
+        st.caption(f"Default risk threshold from training: {default_threshold:.2f}")
 
         threshold = st.slider(
             "Risk threshold for auto-block",
             min_value=0.0,
             max_value=1.0,
-            value=0.7,
+            value=float(default_threshold),
             step=0.01,
         )
 
+        min_events_for_block = st.number_input(
+            "Min high-risk events before blocking an IP",
+            min_value=1,
+            max_value=20,
+            value=3,
+            step=1,
+        )
+
         show_only_high = st.checkbox(
-            "Show only high-risk events", value=True
+            "Show only high-risk events in table", value=True
         )
 
         top_n = st.number_input(
-            "Rows to display",
+            "Rows to display in events table",
             min_value=50,
             max_value=int(len(df)),
             value=min(300, len(df)),
@@ -123,12 +111,11 @@ def main():
         else:
             selected_user = "(All)"
 
-    # Filter by user
+    # Filter table view by user
     df_view = df.copy()
     if selected_user != "(All)" and "user_id" in df_view.columns:
         df_view = df_view[df_view["user_id"].astype(str) == selected_user]
 
-    # Sort by risk
     df_view = df_view.sort_values("risk_score", ascending=False)
     high_risk_mask = df_view["risk_score"] >= threshold
     high_risk_df = df_view[high_risk_mask]
@@ -138,12 +125,17 @@ def main():
     else:
         table_df = df_view.head(int(top_n))
 
-    # Top metrics
+    # Auto-defense on full dataset
+    defense = simulate_auto_defense(
+        df, risk_threshold=threshold, min_events_for_block=min_events_for_block
+    )
+
+    # Metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total events", f"{len(df):,}")
     col2.metric("Malicious (ground truth)", int((df["ground_truth"] == 1).sum()))
-    col3.metric("High-risk predicted", len(high_risk_df))
-    col4.metric("Risk threshold", f"{threshold:.2f}")
+    col3.metric("High-risk events (global)", defense["high_risk_events"])
+    col4.metric("Blocked IPs (simulated)", len(defense["blocked_ips"]))
 
     st.markdown("### Events table")
 
@@ -182,29 +174,22 @@ def main():
         chart_df = time_df[["timestamp", "risk_score"]].set_index("timestamp")
         st.line_chart(chart_df, height=250)
 
-    # Top suspicious events
-    st.markdown("### Top 10 most suspicious events")
-    top10 = high_risk_df.head(10)
-    if not top10.empty:
-        cols = [
-            c
-            for c in [
-                "timestamp",
-                "user_id",
-                "ip_address",
-                "action",
-                "risk_score",
-                "intent_probability",
-            ]
-            if c in top10.columns
-        ]
-        st.table(top10[cols])
+    # Blocked IPs
+    st.markdown("### Auto-defense simulation: blocked IPs")
+    blocked_df = defense["blocked_df"]
+    if blocked_df is not None and not blocked_df.empty:
+        st.write(
+            f"Blocking IPs with at least {min_events_for_block} events "
+            f"above risk {threshold:.2f}."
+        )
+        st.table(blocked_df)
     else:
-        st.write("No high-risk events for current settings.")
+        st.write("No IPs meet the criteria for blocking at current settings.")
 
     st.markdown("---")
     st.caption(
-        "Models: IsolationForest for anomaly detection + RandomForest for intent prediction."
+        "Models: IsolationForest for anomaly detection + RandomForest for intent prediction. "
+        "Risk threshold learned automatically during training."
     )
 
 
